@@ -101,10 +101,11 @@ A página atualiza sozinha a cada 2 segundos.
 2. **Quem usa a CPU** lista os processos no topo. `100%` é um núcleo inteiro. Numa máquina de dois núcleos, um processo pode passar de 100%.
 3. **Quem usa a memória** lista quem ocupa mais RAM residente.
 4. O campo **Filtrar processo** restringe a lista que já está na tela. Digite parte do nome, do usuário ou do pid.
-5. **O que ocupa o disco** separa o disco local das unidades montadas em `/mnt`.
-6. A árvore de pastas mostra os maiores diretórios. A primeira leitura pode levar cerca de um minuto.
-7. **Atualizar pastas** mede o disco de novo.
-8. Se o Docker estiver acessível, a seção **Docker** mostra imagens, contêineres, volumes e cache de build.
+5. **Quem lê e grava agora** mostra a leitura e a gravação reais de cada processo no último intervalo.
+6. **O que ocupa o disco** separa o disco local das unidades montadas em `/mnt`. Na WSL, o cartão de disco também mostra o tamanho do arquivo `ext4.vhdx` no Windows.
+7. A árvore de pastas mostra os maiores diretórios. A primeira leitura pode levar cerca de um minuto.
+8. **Atualizar pastas** mede o disco de novo.
+9. Se o Docker estiver acessível, a seção **Docker** mostra imagens, contêineres, volumes e cache de build.
 
 ### 4. Encerre
 
@@ -116,6 +117,10 @@ No terminal onde o Pulso está rodando, pressione `Ctrl+C`.
 - **CPU** de um processo segue o mesmo critério do `top`: 100% enche um núcleo.
 - **Memória em uso** é o total menos o que ainda está disponível para programas, no mesmo espírito da coluna disponível do `free`.
 - **Disco local** é o sistema de arquivos de `/`, no mesmo espírito do `df`.
+- **Arquivo no Windows** é o tamanho do `ext4.vhdx` da distribuição, o que o disco do Windows realmente ocupa. Ele pode ser maior do que o uso interno e não encolhe sozinho.
+- **Swap em arquivo** é o `swap-wsl.vhdx`, quando a WSL usa um arquivo de swap ao lado da distribuição.
+- **Entrada e saída de swap** são a taxa de páginas entrando e saindo da troca, lida de `/proc/vmstat`.
+- **Leitura e gravação** são os bytes que o processo enviou ao disco naquele intervalo (`read_bytes` e `write_bytes` em `/proc`).
 - **Unidades em /mnt** aparecem só com o total. O Pulso não percorre os arquivos do Windows.
 - Pastas que o seu usuário não pode ler ficam de fora da árvore. O espaço delas entra em “espaço não atribuído”. No caso do Docker, a seção própria cobre imagens e volumes.
 

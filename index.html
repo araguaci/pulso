@@ -123,6 +123,16 @@
     </div>
     <section>
       <div class="toolbar">
+        <h2>Quem lê e grava agora</h2>
+      </div>
+      <p class="muted">Bytes que foram ao disco neste intervalo. Entram só os processos que este usuário consegue medir.</p>
+      <table>
+        <thead><tr><th>Processo</th><th class="num">Leitura</th><th class="num">Gravação</th></tr></thead>
+        <tbody id="io-body"></tbody>
+      </table>
+    </section>
+    <section>
+      <div class="toolbar">
         <h2>O que ocupa o disco</h2>
         <button id="rescan" type="button">Atualizar pastas</button>
       </div>
@@ -141,6 +151,7 @@
     const diskCard = document.getElementById("disk-card");
     const cpuBody = document.getElementById("cpu-body");
     const memBody = document.getElementById("mem-body");
+    const ioBody = document.getElementById("io-body");
     const filesystems = document.getElementById("filesystems");
     const tree = document.getElementById("tree");
     const dockerBox = document.getElementById("docker");
@@ -153,6 +164,11 @@
     let latest = null;
 
     const number = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
+
+    function fmtRate(value) {
+      if (value == null) return "—";
+      return fmtBytes(value) + "/s";
+    }
 
     function fmtBytes(value) {
       const units = ["B", "KB", "MB", "GB", "TB"];
@@ -255,6 +271,17 @@
       if (!memRows.length) addEmpty(memBody, "Nenhum processo neste filtro.");
       cpuRows.forEach((proc) => addProcessRow(cpuBody, proc, number.format(proc.cpu) + "%", fmtBytes(proc.rss)));
       memRows.forEach((proc) => addProcessRow(memBody, proc, fmtBytes(proc.rss), number.format(proc.cpu) + "%"));
+      renderIo();
+    }
+
+    function renderIo() {
+      ioBody.replaceChildren();
+      const rows = latest.processes.by_io || [];
+      if (!rows.length) {
+        addEmpty(ioBody, "Nenhuma leitura ou gravação medida neste intervalo.");
+        return;
+      }
+      rows.forEach((proc) => addProcessRow(ioBody, proc, fmtRate(proc.read_rate), fmtRate(proc.write_rate)));
     }
 
     function addEmpty(body, text) {
@@ -371,17 +398,31 @@
         "cpu",
         "#f0b429"
       ));
+      const swapRate = memory.swap_in_rate == null
+        ? ""
+        : " · entrada " + fmtRate(memory.swap_in_rate) + " · saída " + fmtRate(memory.swap_out_rate);
       memCard.replaceChildren(card(
         "Memória",
         memory.percent,
-        fmtBytes(memory.used) + " em uso · " + fmtBytes(memory.available) + " disponíveis · swap " + fmtBytes(memory.swap_used) + " / " + fmtBytes(memory.swap_total),
+        fmtBytes(memory.used) + " em uso · " + fmtBytes(memory.available) + " disponíveis · swap " + fmtBytes(memory.swap_used) + " / " + fmtBytes(memory.swap_total) + swapRate,
         "mem",
         "#79b8ff"
       ));
+      const virtualDisk = data.virtual_disk || {};
+      let diskDetail = fmtBytes(disk.used) + " usados dentro · " + fmtBytes(disk.avail) + " livres de " + fmtBytes(disk.total);
+      if (virtualDisk.available) {
+        diskDetail += " · arquivo no Windows " + fmtBytes(virtualDisk.vhdx_bytes);
+        if (virtualDisk.drive) {
+          diskDetail += " em " + virtualDisk.drive + " (" + number.format(virtualDisk.drive_percent || 0) + "%)";
+        }
+        if (virtualDisk.swap_vhdx_bytes) {
+          diskDetail += " · swap em arquivo " + fmtBytes(virtualDisk.swap_vhdx_bytes);
+        }
+      }
       diskCard.replaceChildren(card(
         "Disco local",
         disk.percent,
-        fmtBytes(disk.used) + " usados · " + fmtBytes(disk.avail) + " livres de " + fmtBytes(disk.total),
+        diskDetail,
         "disk",
         "#8fd16a"
       ));
@@ -400,7 +441,10 @@
       } else {
         const when = diskScan.finished ? "Atualizado em " + diskScan.finished.replace("T", " ").replace(/-\d{4}$/, "") + ". " : "";
         const hidden = diskScan.unattributed > 0 ? "Espaço não atribuído a uma pasta: " + fmtBytes(diskScan.unattributed) + ". " : "";
-        diskNote.textContent = when + hidden + (diskScan.note || "");
+        const virtualNote = virtualDisk.available && virtualDisk.vhdx_bytes > (disk.used || 0) + 1024 * 1024 * 1024
+          ? "O arquivo do disco virtual no Windows ocupa " + fmtBytes(virtualDisk.vhdx_bytes) + " e não devolve esse espaço sozinho quando você apaga dados aqui. "
+          : "";
+        diskNote.textContent = when + virtualNote + hidden + (diskScan.note || "");
         rescan.disabled = false;
       }
     }

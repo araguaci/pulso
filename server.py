@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import pwd
 import socket
@@ -32,7 +33,8 @@ STATE: dict = {
     "memory": None,
     "disk_root": None,
     "history": [],
-    "processes": {"by_cpu": [], "by_mem": []},
+    "processes": {"by_cpu": [], "by_mem": [], "by_io": []},
+    "virtual_disk": {"available": False},
     "disk": {
         "status": "idle",
         "current": "",
@@ -48,6 +50,11 @@ STATE: dict = {
 HISTORY: deque = deque(maxlen=HISTORY_LIMIT)
 PREV_CPU: tuple[int, int, int] | None = None
 PREV_PROC: dict[int, int] = {}
+PREV_IO: dict[int, tuple[int, int]] = {}
+PREV_SWAP: tuple[int, int] | None = None
+PREV_WHEN: float | None = None
+VHDX_LOCK = threading.Lock()
+VHDX: dict = {"available": False}
 DISK_LOCK = threading.Lock()
 USERS: dict[int, str] = {}
 
@@ -168,6 +175,39 @@ def friendly_name(cmd: str, fallback: str) -> str:
     return exe or fallback
 
 
+def read_proc_io(pid: str) -> tuple[int, int] | None:
+    try:
+        with open(f"/proc/{pid}/io", encoding="utf-8") as handle:
+            values: dict[str, int] = {}
+            for line in handle:
+                key, _, raw = line.partition(":")
+                raw = raw.strip()
+                if raw.isdigit():
+                    values[key] = int(raw)
+    except OSError:
+        return None
+    if "read_bytes" not in values and "write_bytes" not in values:
+        return None
+    return values.get("read_bytes", 0), values.get("write_bytes", 0)
+
+
+def read_swap_pages() -> tuple[int, int]:
+    pin = pout = 0
+    try:
+        with open("/proc/vmstat", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) != 2 or not parts[1].isdigit():
+                    continue
+                if parts[0] == "pswpin":
+                    pin = int(parts[1])
+                elif parts[0] == "pswpout":
+                    pout = int(parts[1])
+    except OSError:
+        return 0, 0
+    return pin, pout
+
+
 def read_cmdline(pid: str, fallback: str) -> str:
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as handle:
@@ -221,6 +261,7 @@ def read_processes() -> list[dict]:
                 "cmd": cmd,
                 "rss": rss,
                 "ticks": ticks,
+                "io": read_proc_io(pid),
             }
         )
     return found
@@ -267,10 +308,19 @@ def read_memory() -> dict:
     }
 
 
-def snapshot(previous_cpu: tuple[int, int, int] | None, previous_proc: dict[int, int]):
+def snapshot(
+    previous_cpu: tuple[int, int, int] | None,
+    previous_proc: dict[int, int],
+    previous_io: dict[int, tuple[int, int]],
+    previous_swap: tuple[int, int] | None,
+    previous_when: float | None,
+):
+    stamp = now()
+    elapsed = max(stamp - previous_when, 0.001) if previous_when is not None else 0.0
     total, idle, iowait = read_aggregate_cpu()
     processes = read_processes()
     cores = os.cpu_count() or 1
+    page_size = os.sysconf("SC_PAGE_SIZE")
     machine_pct = 0.0
     iowait_pct = 0.0
     total_delta = 0
@@ -284,6 +334,7 @@ def snapshot(previous_cpu: tuple[int, int, int] | None, previous_proc: dict[int,
 
     ranked = []
     next_proc: dict[int, int] = {}
+    next_io: dict[int, tuple[int, int]] = {}
     for proc in processes:
         pid = proc["pid"]
         ticks = proc["ticks"]
@@ -292,6 +343,15 @@ def snapshot(previous_cpu: tuple[int, int, int] | None, previous_proc: dict[int,
         if previous_cpu is not None and pid in previous_proc and total_delta > 0:
             cpu = (ticks - previous_proc[pid]) / total_delta * 100 * cores
             cpu = max(cpu, 0.0)
+        io = proc["io"]
+        read_rate = None
+        write_rate = None
+        if io is not None:
+            next_io[pid] = io
+            if previous_when is not None and pid in previous_io and elapsed > 0:
+                old_read, old_write = previous_io[pid]
+                read_rate = max(io[0] - old_read, 0) / elapsed
+                write_rate = max(io[1] - old_write, 0) / elapsed
         item = {
             "pid": pid,
             "user": proc["user"],
@@ -299,16 +359,30 @@ def snapshot(previous_cpu: tuple[int, int, int] | None, previous_proc: dict[int,
             "cmd": proc["cmd"][:240],
             "rss": proc["rss"],
             "cpu": round(cpu, 1),
+            "read_rate": None if read_rate is None else round(read_rate),
+            "write_rate": None if write_rate is None else round(write_rate),
         }
         ranked.append(item)
 
     by_cpu = sorted(ranked, key=lambda item: item["cpu"], reverse=True)[:TOP_N]
     by_mem = sorted(ranked, key=lambda item: item["rss"], reverse=True)[:TOP_N]
+    by_io = sorted(
+        [item for item in ranked if (item["read_rate"] or 0) + (item["write_rate"] or 0) > 0],
+        key=lambda item: (item["read_rate"] or 0) + (item["write_rate"] or 0),
+        reverse=True,
+    )[:TOP_N]
     memory = read_memory()
+    swap_pages = read_swap_pages()
+    if previous_swap is not None and previous_when is not None and elapsed > 0:
+        memory["swap_in_rate"] = round(max(swap_pages[0] - previous_swap[0], 0) * page_size / elapsed)
+        memory["swap_out_rate"] = round(max(swap_pages[1] - previous_swap[1], 0) * page_size / elapsed)
+    else:
+        memory["swap_in_rate"] = None
+        memory["swap_out_rate"] = None
     disk = root_disk()
     live = {
         "collecting": previous_cpu is None,
-        "updated": now(),
+        "updated": stamp,
         "host": socket.gethostname(),
         "uptime": uptime_seconds(),
         "cpu": {
@@ -320,9 +394,10 @@ def snapshot(previous_cpu: tuple[int, int, int] | None, previous_proc: dict[int,
         },
         "memory": memory,
         "disk_root": disk,
-        "processes": {"by_cpu": by_cpu, "by_mem": by_mem},
+        "processes": {"by_cpu": by_cpu, "by_mem": by_mem, "by_io": by_io},
+        "virtual_disk": virtual_disk_copy(),
     }
-    return live, (total, idle, iowait), next_proc
+    return live, (total, idle, iowait), next_proc, next_io, swap_pages, stamp
 
 
 def publish_live(live: dict) -> None:
@@ -344,13 +419,14 @@ def publish_live(live: dict) -> None:
         STATE["memory"] = live["memory"]
         STATE["disk_root"] = live["disk_root"]
         STATE["processes"] = live["processes"]
+        STATE["virtual_disk"] = live["virtual_disk"]
         STATE["history"] = list(HISTORY)
 
 
 def sampler() -> None:
-    global PREV_CPU, PREV_PROC
+    global PREV_CPU, PREV_PROC, PREV_IO, PREV_SWAP, PREV_WHEN
     try:
-        live, PREV_CPU, PREV_PROC = snapshot(None, {})
+        live, PREV_CPU, PREV_PROC, PREV_IO, PREV_SWAP, PREV_WHEN = snapshot(None, {}, {}, None, None)
         publish_live(live)
     except Exception as exc:  # noqa: BLE001 - keep the sampler alive
         with LOCK:
@@ -358,7 +434,9 @@ def sampler() -> None:
     time.sleep(1.0)
     while True:
         try:
-            live, PREV_CPU, PREV_PROC = snapshot(PREV_CPU, PREV_PROC)
+            live, PREV_CPU, PREV_PROC, PREV_IO, PREV_SWAP, PREV_WHEN = snapshot(
+                PREV_CPU, PREV_PROC, PREV_IO, PREV_SWAP, PREV_WHEN
+            )
             publish_live(live)
         except Exception as exc:  # noqa: BLE001 - keep the sampler alive
             with LOCK:
@@ -664,6 +742,133 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def virtual_disk_copy() -> dict:
+    with VHDX_LOCK:
+        return dict(VHDX)
+
+
+def distro_name() -> str:
+    name = os.environ.get("WSL_DISTRO_NAME", "").strip()
+    if name:
+        return name
+    try:
+        output = subprocess.check_output(["wslpath", "-w", "/"], text=True, timeout=4).strip()
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        return ""
+    parts = [part for part in output.replace("/", "\\").split("\\") if part]
+    return parts[-1] if parts else ""
+
+
+def windows_to_linux(path: str) -> str | None:
+    cleaned = path.strip().strip('"')
+    if cleaned.startswith("\\\\?\\"):
+        cleaned = cleaned[4:]
+    if len(cleaned) >= 3 and cleaned[1] == ":":
+        drive = cleaned[0].lower()
+        rest = cleaned[2:].replace("\\", "/").lstrip("/")
+        return f"/mnt/{drive}/{rest}"
+    return None
+
+
+def distro_base_path(name: str) -> str:
+    if not re.fullmatch(r"[\w.-]+", name):
+        return ""
+    script = (
+        "$n='" + name + "'; "
+        "Get-ChildItem 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss' "
+        "-ErrorAction SilentlyContinue | ForEach-Object { "
+        "$p = Get-ItemProperty $_.PSPath; "
+        "if ($p.DistributionName -eq $n) { $p.BasePath } }"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def file_size(path: str) -> int | None:
+    try:
+        return os.stat(path).st_size
+    except OSError:
+        return None
+
+
+def discover_virtual_disk() -> dict:
+    name = distro_name()
+    if not name:
+        return {"available": False}
+    linux_base = windows_to_linux(distro_base_path(name))
+    if not linux_base:
+        return {"available": False, "distro": name}
+    vhdx_bytes = file_size(os.path.join(linux_base, "ext4.vhdx"))
+    if vhdx_bytes is None:
+        return {"available": False, "distro": name}
+    parent = os.path.dirname(linux_base.rstrip("/"))
+    swap_path = ""
+    for candidate in (
+        os.path.join(parent, "swap-wsl.vhdx"),
+        os.path.join(linux_base, "swap.vhdx"),
+    ):
+        if os.path.isfile(candidate):
+            swap_path = candidate
+            break
+    drive = ""
+    drive_percent = None
+    drive_used = None
+    drive_total = None
+    if linux_base.startswith("/mnt/") and len(linux_base) > 6:
+        letter = linux_base[5]
+        drive = letter.upper() + ":"
+        try:
+            stats = os.statvfs("/mnt/" + letter)
+        except OSError:
+            stats = None
+        if stats is not None:
+            frsize = stats.f_frsize or stats.f_bsize
+            drive_total = stats.f_blocks * frsize
+            drive_used = (stats.f_blocks - stats.f_bfree) * frsize
+            avail = stats.f_bavail * frsize
+            base = drive_used + avail
+            drive_percent = round((drive_used / base * 100) if base else 0.0, 1)
+    display = linux_base
+    if display.startswith("/mnt/") and len(display) > 6:
+        display = display[5].upper() + ":" + display[6:].replace("/", "\\")
+    return {
+        "available": True,
+        "distro": name,
+        "vhdx_path": display + "\\ext4.vhdx",
+        "vhdx_bytes": vhdx_bytes,
+        "swap_vhdx_bytes": file_size(swap_path) if swap_path else 0,
+        "drive": drive,
+        "drive_percent": drive_percent,
+        "drive_used": drive_used,
+        "drive_total": drive_total,
+    }
+
+
+def virtual_disk_loop() -> None:
+    while True:
+        try:
+            info = discover_virtual_disk()
+        except Exception as exc:  # noqa: BLE001
+            info = {"available": False, "error": str(exc)}
+        with VHDX_LOCK:
+            VHDX.clear()
+            VHDX.update(info)
+        time.sleep(30)
+
+
 def lan_addresses() -> list[str]:
     addresses: list[str] = []
     try:
@@ -688,6 +893,7 @@ def lan_addresses() -> list[str]:
 def serve(host: str = HOST, port: int = PORT) -> None:
     threading.Thread(target=sampler, daemon=True).start()
     threading.Thread(target=disk_scan, daemon=True).start()
+    threading.Thread(target=virtual_disk_loop, daemon=True).start()
     class Server(ThreadingHTTPServer):
         allow_reuse_address = True
 
