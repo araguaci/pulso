@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Aviso de segurança
+    url: https://github.com/araguaci/pulso/security/advisories/new
+    about: Relate uma vulnerabilidade em privado. Não abra uma issue pública.

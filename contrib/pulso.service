@@ -1,0 +1,13 @@
+[Unit]
+Description=Pulso — painel de CPU, memória e disco
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/pulso
+ExecStart=/usr/bin/python3 %h/pulso/server.py --host 0.0.0.0 --port 8787
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

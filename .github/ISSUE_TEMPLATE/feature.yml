@@ -1,0 +1,17 @@
+name: Ideia
+description: Sugira uma melhoria para o Pulso
+title: "[ideia] "
+labels: ["melhoria"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: Que situação isso resolve
+    validations:
+      required: true
+  - type: textarea
+    id: proposta
+    attributes:
+      label: Como você imagina o comportamento
+    validations:
+      required: true

@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulso</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect fill='%238fd16a' width='16' height='16' rx='3'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #10140f;
+      --card: #171d15;
+      --line: #2c3628;
+      --text: #eef3e8;
+      --muted: #a4ae9b;
+      --cpu: #f0b429;
+      --mem: #79b8ff;
+      --disk: #8fd16a;
+      --hot: #ef6f5e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.45 "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 56px; }
+    header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; }
+    h2 { margin: 0 0 12px; font-size: 16px; font-weight: 650; }
+    h3 { margin: 16px 0 8px; font-size: 14px; font-weight: 650; }
+    .sub, .muted { color: var(--muted); }
+    .sub { margin: 4px 0 0; }
+    .live { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .cards, .cols { display: grid; gap: 14px; }
+    .cards { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 14px; }
+    .cols { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); margin-bottom: 14px; }
+    section, .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    .metric { font-size: 34px; font-weight: 680; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+    .bar { height: 8px; border-radius: 99px; background: #2a3327; overflow: hidden; margin: 10px 0; }
+    .bar > span { display: block; height: 100%; width: 0; border-radius: inherit; }
+    .cpu .metric, .cpu .bar > span { color: var(--cpu); background: var(--cpu); }
+    .cpu .metric { background: none; }
+    .mem .metric { color: var(--mem); }
+    .mem .bar > span { background: var(--mem); }
+    .diskcard .metric { color: var(--disk); }
+    .diskcard .bar > span { background: var(--disk); }
+    .hot { color: var(--hot) !important; }
+    .hotbar { background: var(--hot) !important; }
+    svg.spark { width: 100%; height: 42px; display: block; margin: 4px 0 8px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 0 8px 8px; }
+    td { padding: 8px; border-top: 1px solid var(--line); vertical-align: top; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; font-family: "Cascadia Mono", "Segoe UI Mono", ui-monospace, monospace; white-space: nowrap; }
+    .cmd { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
+    .toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
+    button, input {
+      background: #222a1f;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font: inherit;
+    }
+    button { cursor: pointer; }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    input { min-width: 180px; }
+    .tree-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 7px 0; border-top: 1px solid var(--line); }
+    .tree-name { min-width: 0; }
+    .tree-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mini { height: 6px; border-radius: 99px; background: #2a3327; margin-top: 5px; }
+    .mini > span { display: block; height: 100%; background: var(--disk); border-radius: inherit; }
+    .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+    .fs { margin-bottom: 8px; }
+    footer { margin-top: 16px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 720px) {
+      header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Pulso</h1>
+        <p class="sub" id="subtitle">Coletando a primeira amostra…</p>
+      </div>
+      <div class="live" id="live">aguardando</div>
+    </header>
+    <div class="cards">
+      <article class="card cpu" id="cpu-card"></article>
+      <article class="card mem" id="mem-card"></article>
+      <article class="card diskcard" id="disk-card"></article>
+    </div>
+    <div class="cols">
+      <section>
+        <div class="toolbar">
+          <h2>Quem usa a CPU</h2>
+          <input id="filter-cpu" type="search" placeholder="Filtrar processo" aria-label="Filtrar processos por CPU">
+        </div>
+        <p class="muted">100% equivale a um núcleo inteiro.</p>
+        <table>
+          <thead><tr><th>Processo</th><th class="num">CPU</th><th class="num">RAM</th></tr></thead>
+          <tbody id="cpu-body"></tbody>
+        </table>
+      </section>
+      <section>
+        <div class="toolbar">
+          <h2>Quem usa a memória</h2>
+          <input id="filter-mem" type="search" placeholder="Filtrar processo" aria-label="Filtrar processos por memória">
+        </div>
+        <p class="muted">Memória residente desta máquina virtual.</p>
+        <table>
+          <thead><tr><th>Processo</th><th class="num">RAM</th><th class="num">CPU</th></tr></thead>
+          <tbody id="mem-body"></tbody>
+        </table>
+      </section>
+    </div>
+    <section>
+      <div class="toolbar">
+        <h2>O que ocupa o disco</h2>
+        <button id="rescan" type="button">Atualizar pastas</button>
+      </div>
+      <div id="filesystems"></div>
+      <div id="tree"></div>
+      <div id="docker"></div>
+      <p class="note" id="disk-note"></p>
+    </section>
+    <footer>
+      O Pulso mede as pastas do disco local. Em /mnt mostra só o total de cada unidade, sem varrer os arquivos.
+    </footer>
+  </div>
+  <script>
+    const cpuCard = document.getElementById("cpu-card");
+    const memCard = document.getElementById("mem-card");
+    const diskCard = document.getElementById("disk-card");
+    const cpuBody = document.getElementById("cpu-body");
+    const memBody = document.getElementById("mem-body");
+    const filesystems = document.getElementById("filesystems");
+    const tree = document.getElementById("tree");
+    const dockerBox = document.getElementById("docker");
+    const diskNote = document.getElementById("disk-note");
+    const subtitle = document.getElementById("subtitle");
+    const live = document.getElementById("live");
+    const rescan = document.getElementById("rescan");
+    const filterCpu = document.getElementById("filter-cpu");
+    const filterMem = document.getElementById("filter-mem");
+    let latest = null;
+
+    const number = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
+
+    function fmtBytes(value) {
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let size = Number(value) || 0;
+      let index = 0;
+      while (size >= 1024 && index < units.length - 1) {
+        size /= 1024;
+        index += 1;
+      }
+      const digits = index === 0 ? 0 : 1;
+      return number.format(Number(size.toFixed(digits))) + " " + units[index];
+    }
+
+    function fmtUptime(seconds) {
+      const total = Math.floor(seconds || 0);
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      if (days > 0) return days + " d " + hours + " h";
+      if (hours > 0) return hours + " h " + minutes + " min";
+      return minutes + " min";
+    }
+
+    function card(title, percent, detail, historyKey, color) {
+      const box = document.createElement("div");
+      const heading = document.createElement("div");
+      heading.className = "muted";
+      heading.textContent = title;
+      const metric = document.createElement("div");
+      metric.className = "metric" + (percent >= 90 ? " hot" : "");
+      metric.textContent = number.format(percent) + "%";
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      const fill = document.createElement("span");
+      fill.style.width = Math.max(0, Math.min(percent, 100)) + "%";
+      if (percent >= 90) fill.className = "hotbar";
+      bar.appendChild(fill);
+      const extra = document.createElement("div");
+      extra.className = "muted";
+      extra.textContent = detail;
+      box.append(heading, metric, bar, spark(historyKey, color), extra);
+      return box;
+    }
+
+    function spark(key, color) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 160 42");
+      svg.setAttribute("preserveAspectRatio", "none");
+      svg.setAttribute("class", "spark");
+      const values = (latest && latest.history || []).map((point) => point[key]);
+      if (values.length < 2) return svg;
+      const max = Math.max(100, ...values);
+      const step = 160 / (values.length - 1);
+      const points = values.map((value, index) => {
+        const y = 40 - (value / max) * 36;
+        return (index * step).toFixed(1) + "," + y.toFixed(1);
+      }).join(" ");
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", color);
+      line.setAttribute("stroke-width", "2");
+      line.setAttribute("points", points);
+      svg.appendChild(line);
+      return svg;
+    }
+
+    function matches(proc, query) {
+      if (!query) return true;
+      const hay = (proc.name + " " + proc.cmd + " " + proc.user + " " + proc.pid).toLowerCase();
+      return hay.includes(query.toLowerCase());
+    }
+
+    function addProcessRow(body, proc, primary, secondary) {
+      const row = document.createElement("tr");
+      const name = document.createElement("td");
+      const strong = document.createElement("strong");
+      strong.textContent = proc.name;
+      const meta = document.createElement("span");
+      meta.className = "cmd";
+      meta.textContent = proc.user + " · pid " + proc.pid + " · " + proc.cmd;
+      name.append(strong, meta);
+      const a = document.createElement("td");
+      a.className = "num";
+      a.textContent = primary;
+      const b = document.createElement("td");
+      b.className = "num";
+      b.textContent = secondary;
+      row.append(name, a, b);
+      body.appendChild(row);
+    }
+
+    function renderProcesses() {
+      const cpuQuery = filterCpu.value.trim();
+      const memQuery = filterMem.value.trim();
+      cpuBody.replaceChildren();
+      memBody.replaceChildren();
+      const cpuRows = (latest.processes.by_cpu || []).filter((proc) => matches(proc, cpuQuery));
+      const memRows = (latest.processes.by_mem || []).filter((proc) => matches(proc, memQuery));
+      if (!cpuRows.length) addEmpty(cpuBody, "Nenhum processo neste filtro.");
+      if (!memRows.length) addEmpty(memBody, "Nenhum processo neste filtro.");
+      cpuRows.forEach((proc) => addProcessRow(cpuBody, proc, number.format(proc.cpu) + "%", fmtBytes(proc.rss)));
+      memRows.forEach((proc) => addProcessRow(memBody, proc, fmtBytes(proc.rss), number.format(proc.cpu) + "%"));
+    }
+
+    function addEmpty(body, text) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 3;
+      cell.className = "muted";
+      cell.textContent = text;
+      row.appendChild(cell);
+      body.appendChild(row);
+    }
+
+    function filesystemGroup(title, rows) {
+      const group = document.createElement("div");
+      const heading = document.createElement("h3");
+      heading.textContent = title;
+      group.appendChild(heading);
+      rows.forEach((item) => {
+        const block = document.createElement("div");
+        block.className = "fs";
+        const label = document.createElement("div");
+        label.textContent = item.unavailable
+          ? item.label + " (" + item.mount + ") sem resposta"
+          : item.label + " · " + item.mount + " · " + fmtBytes(item.used) + " usados de " + fmtBytes(item.total) + " · " + number.format(item.percent) + "%";
+        const bar = document.createElement("div");
+        bar.className = "mini";
+        const fill = document.createElement("span");
+        fill.style.width = Math.max(0, Math.min(item.percent || 0, 100)) + "%";
+        if (item.windows) fill.style.background = "#d7c07a";
+        if ((item.percent || 0) >= 90) fill.style.background = "#ef6f5e";
+        bar.appendChild(fill);
+        block.append(label, bar);
+        group.appendChild(block);
+      });
+      return group;
+    }
+
+    function renderFilesystems(rows) {
+      filesystems.replaceChildren();
+      const local = (rows || []).filter((item) => !item.windows);
+      const windows = (rows || []).filter((item) => item.windows);
+      if (local.length) filesystems.appendChild(filesystemGroup("Nesta máquina", local));
+      if (windows.length) filesystems.appendChild(filesystemGroup("Unidades do Windows, só o total", windows));
+    }
+
+    function renderDocker(docker) {
+      dockerBox.replaceChildren();
+      if (!docker || !docker.available || !(docker.rows || []).length) return;
+      const heading = document.createElement("h3");
+      heading.textContent = "Docker";
+      dockerBox.appendChild(heading);
+      const labels = {
+        "Images": "Imagens",
+        "Containers": "Contêineres",
+        "Local Volumes": "Volumes",
+        "Build Cache": "Cache de build"
+      };
+      docker.rows.forEach((row) => {
+        const line = document.createElement("div");
+        line.className = "tree-row";
+        const name = document.createElement("div");
+        name.textContent = (labels[row.type] || row.type) + " · " + row.active + " ativos de " + row.total + " · recuperável " + row.reclaimable;
+        const size = document.createElement("div");
+        size.className = "num";
+        size.textContent = row.size;
+        line.append(name, size);
+        dockerBox.appendChild(line);
+      });
+    }
+
+    function renderTree(nodes, depth, scale) {
+      const box = document.createElement("div");
+      (nodes || []).forEach((node) => {
+        const row = document.createElement("div");
+        row.className = "tree-row";
+        row.style.paddingLeft = (depth * 16) + "px";
+        const name = document.createElement("div");
+        name.className = "tree-name";
+        const path = document.createElement("div");
+        path.className = "tree-path";
+        path.textContent = node.path;
+        path.title = node.path;
+        const bar = document.createElement("div");
+        bar.className = "mini";
+        const fill = document.createElement("span");
+        const width = scale > 0 ? Math.max(2, Math.min(node.size / scale * 100, 100)) : 0;
+        fill.style.width = width + "%";
+        if (node.remainder) fill.style.background = "#6e7a68";
+        bar.appendChild(fill);
+        name.append(path, bar);
+        const size = document.createElement("div");
+        size.className = "num";
+        size.textContent = fmtBytes(node.size);
+        row.append(name, size);
+        box.appendChild(row);
+        if (node.children && node.children.length) {
+          box.appendChild(renderTree(node.children, depth + 1, scale));
+        }
+      });
+      return box;
+    }
+
+    function render(data) {
+      latest = data;
+      const cpu = data.cpu || { percent: 0, cores: 0, load: [0, 0, 0], model: "", iowait: 0 };
+      const memory = data.memory || { percent: 0, used: 0, total: 0, available: 0, swap_used: 0, swap_total: 0 };
+      const disk = data.disk_root || { percent: 0, used: 0, total: 0, avail: 0 };
+      subtitle.textContent = data.host + " · ligada há " + fmtUptime(data.uptime) + " · " + (cpu.cores || "?") + " núcleos";
+      live.textContent = data.collecting ? "medindo CPU…" : "ao vivo";
+      cpuCard.replaceChildren(card(
+        "CPU",
+        cpu.percent,
+        "carga " + number.format(cpu.load[0] || 0) + " · espera de disco " + number.format(cpu.iowait || 0) + "%" + (cpu.model ? " · " + cpu.model : ""),
+        "cpu",
+        "#f0b429"
+      ));
+      memCard.replaceChildren(card(
+        "Memória",
+        memory.percent,
+        fmtBytes(memory.used) + " em uso · " + fmtBytes(memory.available) + " disponíveis · swap " + fmtBytes(memory.swap_used) + " / " + fmtBytes(memory.swap_total),
+        "mem",
+        "#79b8ff"
+      ));
+      diskCard.replaceChildren(card(
+        "Disco local",
+        disk.percent,
+        fmtBytes(disk.used) + " usados · " + fmtBytes(disk.avail) + " livres de " + fmtBytes(disk.total),
+        "disk",
+        "#8fd16a"
+      ));
+      renderProcesses();
+      const diskScan = data.disk || {};
+      renderFilesystems(diskScan.filesystems);
+      const scale = disk.used || 1;
+      tree.replaceChildren(renderTree(diskScan.tree || [], 0, scale));
+      renderDocker(diskScan.docker);
+      if (diskScan.status === "scanning") {
+        diskNote.textContent = "Lendo pastas" + (diskScan.current ? " em " + diskScan.current : "") + "…";
+        rescan.disabled = true;
+      } else if (diskScan.status === "error") {
+        diskNote.textContent = "A leitura das pastas falhou: " + (diskScan.error || "erro desconhecido");
+        rescan.disabled = false;
+      } else {
+        const when = diskScan.finished ? "Atualizado em " + diskScan.finished.replace("T", " ").replace(/-\d{4}$/, "") + ". " : "";
+        const hidden = diskScan.unattributed > 0 ? "Espaço não atribuído a uma pasta: " + fmtBytes(diskScan.unattributed) + ". " : "";
+        diskNote.textContent = when + hidden + (diskScan.note || "");
+        rescan.disabled = false;
+      }
+    }
+
+    async function tick() {
+      try {
+        const response = await fetch("/api/stats", { cache: "no-store" });
+        if (!response.ok) throw new Error(String(response.status));
+        render(await response.json());
+      } catch (error) {
+        live.textContent = "sem resposta";
+      }
+    }
+
+    filterCpu.addEventListener("input", () => { if (latest) renderProcesses(); });
+    filterMem.addEventListener("input", () => { if (latest) renderProcesses(); });
+    rescan.addEventListener("click", async () => {
+      rescan.disabled = true;
+      await fetch("/api/disk/refresh", { method: "POST" });
+      tick();
+    });
+    tick();
+    setInterval(tick, 2000);
+  </script>
+</body>
+</html>

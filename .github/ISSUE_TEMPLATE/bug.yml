@@ -1,0 +1,32 @@
+name: Problema
+description: Algo no Pulso não funciona como o guia descreve
+title: "[problema] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: aconteceu
+    attributes:
+      label: O que aconteceu
+      description: Descreva o que você fez e o que apareceu.
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: O que você esperava
+    validations:
+      required: true
+  - type: input
+    id: ambiente
+    attributes:
+      label: Ambiente
+      description: Sistema, versão do Python e como o Pulso foi iniciado.
+      placeholder: "Debian 12 na WSL2, Python 3.11, python3 server.py"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Saída do terminal ou trecho relevante
+      description: Não cole senhas, tokens nem chaves.
+      render: text
