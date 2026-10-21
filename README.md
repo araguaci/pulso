@@ -6,6 +6,10 @@ Não instala pacote nenhum além do Python que o sistema já traz.
 
 **English.** Pulso is a local browser dashboard for CPU, memory, and disk on Linux and WSL. It uses only the Python standard library. The guide below is in Portuguese.
 
+A [amostra das telas](docs/GUIA.md) mostra o painel sem instalar.
+
+![Pulso: CPU, memória e disco local](docs/img/pulso-hero.webp)
+
 ## Requisitos
 
 | Item | Exigência |
